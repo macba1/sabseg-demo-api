@@ -2,6 +2,7 @@
 Motor de Reconciliación Contable
 ================================
 Cruza Fichero A (Producción/Venta) vs Fichero B (Contabilidad)
+y opcionalmente vs Fichero C (Liquidaciones Aseguradoras).
 Detecta, clasifica y explica discrepancias.
 """
 
@@ -330,3 +331,195 @@ def safe_str(row, col):
         return str(v)
     except:
         return "—"
+
+
+# ── Triangular reconciliation (A vs B + A vs C) ───────────────────────────────
+
+def _find_col(df: pd.DataFrame, *candidates: str):
+    """Find a column by exact match first, then substring (case-insensitive)."""
+    for name in candidates:
+        for col in df.columns:
+            if col.strip().lower() == name.lower():
+                return col
+    for name in candidates:
+        for col in df.columns:
+            if name.lower() in col.strip().lower():
+                return col
+    return None
+
+
+def run_triangular_reconciliation(
+    file_a_bytes: bytes, file_b_bytes: bytes, file_c_bytes: bytes
+) -> dict:
+    """
+    Runs A vs B reconciliation (normal) and adds A vs C cross
+    (Estadística de Venta vs Liquidaciones Aseguradoras).
+    Discrepancies from C are marked with fuente='Liquidación aseguradora'.
+    """
+    result = run_reconciliation(file_a_bytes, file_b_bytes)
+    if "error" in result:
+        return result
+
+    df_a = pd.read_excel(BytesIO(file_a_bytes))
+    df_c = pd.read_excel(BytesIO(file_c_bytes))
+
+    col_map_a = detect_columns(df_a, "A")
+    policy_col_a  = col_map_a.get("poliza")
+    prima_col_a   = col_map_a.get("prima_neta")
+    total_col_a   = col_map_a.get("prima_total")
+    com_pct_col_a = col_map_a.get("comision_pct")
+    com_eur_col_a = col_map_a.get("comision_eur")
+    recibo_col_a  = col_map_a.get("recibo")
+    aseg_col_a    = col_map_a.get("aseguradora")
+    ramo_col_a    = col_map_a.get("ramo")
+    cliente_col_a = col_map_a.get("cliente")
+
+    # Locate C columns using exact names from spec with fuzzy fallback
+    c_poliza_col  = _find_col(df_c, "Nº Póliza Mediador", "póliza mediador", "poliza mediador")
+    c_prima_col   = _find_col(df_c, "Prima Liquidada")
+    c_com_pct_col = _find_col(df_c, "% Comisión Liquidada", "% comision liquidada")
+    c_com_eur_col = _find_col(df_c, "Comisión Liquidada €", "Comision Liquidada €", "comisión liquidada eur")
+    c_aseg_col    = _find_col(df_c, "Aseguradora")
+    c_periodo_col = _find_col(df_c, "Periodo Liquidación", "Periodo Liquidacion")
+    c_estado_col  = _find_col(df_c, "Estado")
+
+    if not policy_col_a or not c_poliza_col:
+        result["triangular"] = False
+        result["triangular_error"] = "No se pudo cruzar A vs C: columna de póliza no detectada."
+        return result
+
+    policies_a = set(df_a[policy_col_a].dropna().astype(str))
+    policies_c = set(df_c[c_poliza_col].dropna().astype(str))
+    matched_ac = policies_a & policies_c
+    only_in_a  = policies_a - policies_c
+
+    a_by_pol = df_a.set_index(df_a[policy_col_a].astype(str))
+    c_by_pol = df_c.set_index(df_c[c_poliza_col].astype(str))
+
+    disc_ac = []
+    disc_id = result["total_discrepancias"]
+
+    # ── Policies in A not liquidated by C ─────────────────────────────────
+    for poliza in only_in_a:
+        row_a = a_by_pol.loc[poliza]
+        if isinstance(row_a, pd.DataFrame):
+            row_a = row_a.iloc[0]
+        imp = safe_float(row_a, total_col_a) or safe_float(row_a, prima_col_a) or 0
+        if imp <= 0:
+            continue
+        disc_id += 1
+        disc_ac.append({
+            "id": disc_id,
+            "tipo": "Póliza no liquidada por aseguradora",
+            "severidad": "Media",
+            "fuente": "Liquidación aseguradora",
+            "poliza": poliza,
+            "recibo": safe_str(row_a, recibo_col_a),
+            "aseguradora": safe_str(row_a, aseg_col_a),
+            "ramo": safe_str(row_a, ramo_col_a),
+            "cliente": safe_str(row_a, cliente_col_a),
+            "importe_produccion": imp,
+            "importe_contabilidad": None,
+            "diferencia": imp,
+            "explicacion": (
+                f"La póliza {poliza} aparece en estadística de venta ({imp:,.2f}€) "
+                f"pero no figura en el fichero de liquidaciones de la aseguradora."
+            ),
+            "accion_recomendada": (
+                "Verificar con la aseguradora si la liquidación está pendiente o ha sido rechazada."
+            ),
+        })
+
+    # ── Compare matched A vs C ────────────────────────────────────────────
+    for poliza in matched_ac:
+        row_a = a_by_pol.loc[poliza]
+        row_c = c_by_pol.loc[poliza]
+        if isinstance(row_a, pd.DataFrame):
+            row_a = row_a.iloc[0]
+        if isinstance(row_c, pd.DataFrame):
+            row_c = row_c.iloc[0]
+
+        p_a = safe_float(row_a, total_col_a) or safe_float(row_a, prima_col_a)
+        p_c = safe_float(row_c, c_prima_col)
+        aseg = safe_str(row_c, c_aseg_col)
+        periodo = safe_str(row_c, c_periodo_col)
+
+        # Prima difference
+        if p_a is not None and p_c is not None:
+            diff = abs(p_a - p_c)
+            if diff > 0.10:
+                disc_id += 1
+                disc_ac.append({
+                    "id": disc_id,
+                    "tipo": "Diferencia prima liquidada",
+                    "severidad": "Alta" if diff > 100 else "Media",
+                    "fuente": "Liquidación aseguradora",
+                    "poliza": poliza,
+                    "recibo": safe_str(row_a, recibo_col_a),
+                    "aseguradora": aseg,
+                    "ramo": safe_str(row_a, ramo_col_a),
+                    "cliente": safe_str(row_a, cliente_col_a),
+                    "importe_produccion": p_a,
+                    "importe_contabilidad": p_c,
+                    "diferencia": round(p_a - p_c, 2),
+                    "explicacion": (
+                        f"Prima en estadística de venta: {p_a:,.2f}€. "
+                        f"Prima liquidada por {aseg} (periodo {periodo}): {p_c:,.2f}€. "
+                        f"Diferencia: {p_a - p_c:,.2f}€."
+                    ),
+                    "accion_recomendada": (
+                        "Reclamar la diferencia a la aseguradora o revisar las condiciones del contrato."
+                    ),
+                })
+
+        # Commission difference
+        c_pct_a = safe_float(row_a, com_pct_col_a)
+        c_pct_c = safe_float(row_c, c_com_pct_col)
+        c_eur_a = safe_float(row_a, com_eur_col_a)
+        c_eur_c = safe_float(row_c, c_com_eur_col)
+
+        if c_pct_a is not None and c_pct_c is not None and abs(c_pct_a - c_pct_c) > 0.5:
+            disc_id += 1
+            disc_ac.append({
+                "id": disc_id,
+                "tipo": "Comisión liquidada incorrecta",
+                "severidad": "Alta",
+                "fuente": "Liquidación aseguradora",
+                "poliza": poliza,
+                "recibo": safe_str(row_a, recibo_col_a),
+                "aseguradora": aseg,
+                "ramo": safe_str(row_a, ramo_col_a),
+                "cliente": safe_str(row_a, cliente_col_a),
+                "importe_produccion": c_eur_a,
+                "importe_contabilidad": c_eur_c,
+                "diferencia": round((c_eur_a or 0) - (c_eur_c or 0), 2),
+                "explicacion": (
+                    f"Comisión esperada: {c_pct_a:.1f}% ({c_eur_a:,.2f}€). "
+                    f"Liquidada por {aseg}: {c_pct_c:.1f}% ({c_eur_c:,.2f}€)."
+                ),
+                "accion_recomendada": "Reclamar diferencia de comisión a la aseguradora.",
+            })
+
+    # ── Merge and rebuild summary ─────────────────────────────────────────
+    all_disc = result["discrepancias"] + disc_ac
+
+    by_type = result.get("resumen_por_tipo", {})
+    by_sev  = result.get("resumen_por_severidad", {})
+    for d in disc_ac:
+        t = d["tipo"]
+        if t not in by_type:
+            by_type[t] = {"count": 0, "importe_total": 0}
+        by_type[t]["count"] += 1
+        by_type[t]["importe_total"] += abs(d["diferencia"] or 0)
+        s = d["severidad"]
+        by_sev[s] = by_sev.get(s, 0) + 1
+
+    result.update({
+        "triangular": True,
+        "registros_liquidaciones": len(df_c),
+        "discrepancias": all_disc,
+        "total_discrepancias": len(all_disc),
+        "resumen_por_tipo": by_type,
+        "resumen_por_severidad": by_sev,
+    })
+    return result
