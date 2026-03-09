@@ -7,6 +7,7 @@ genera un informe de calidad.
 """
 
 import pandas as pd
+import numpy as np
 from io import BytesIO
 from datetime import datetime
 import re
@@ -399,7 +400,16 @@ def run_normalization(file_bytes: bytes, filename: str = "") -> dict:
     records_clean = total_records - min(total_issues, total_records)
     pct_clean = round((records_clean / max(total_records, 1)) * 100, 1)
 
-    return {
+    def _clean(val):
+        """Convert numpy types to Python native for JSON serialization."""
+        if isinstance(val, (np.integer,)): return int(val)
+        if isinstance(val, (np.floating,)): return None if np.isnan(val) else float(val)
+        if isinstance(val, (np.bool_,)): return bool(val)
+        if isinstance(val, dict): return {k: _clean(v) for k, v in val.items()}
+        if isinstance(val, list): return [_clean(v) for v in val]
+        return val
+
+    return _clean({
         "filename": filename,
         "detected_language": detected_lang,
         "detected_country": detected_country,
@@ -418,7 +428,7 @@ def run_normalization(file_bytes: bytes, filename: str = "") -> dict:
         "total_quality_issues": total_issues,
         "records_clean": records_clean,
         "pct_clean": pct_clean,
-        "normalized_preview": normalized.head(10).to_dict(orient="records"),
+        "normalized_preview": normalized.head(10).replace({np.nan: None}).to_dict(orient="records"),
         "original_columns": list(df.columns),
         "canonical_columns": list(normalized.columns),
-    }
+    })
