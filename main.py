@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 import os
 
 from reconciliation import run_reconciliation
-from normalization import run_normalization
+from normalization import run_normalization, CANONICAL_FIELDS
 
 app = FastAPI(title="Sabseg Reconciliation Demo", version="1.0.0")
 
@@ -181,4 +181,44 @@ async def normalize_demo():
         "total_quality_issues": total_issues,
         "countries_detected": countries,
         "results": results,
+    })
+
+
+@app.post("/api/normalize-consolidate")
+async def normalize_consolidate(
+    files: list[UploadFile] = File(..., description="Ficheros de corredurías a consolidar"),
+):
+    """
+    Normalize multiple brokerage files and consolidate into a single unified dataset.
+    """
+    all_records = []
+    file_summaries = []
+
+    for f in files:
+        try:
+            file_bytes = await f.read()
+            result = run_normalization(file_bytes, f.filename)
+            records = result.get("normalized_all", [])
+            for rec in records:
+                rec["_source_file"] = f.filename
+                rec["_source_country"] = result.get("detected_country", "??")
+            all_records.extend(records)
+            file_summaries.append({
+                "filename": f.filename,
+                "country": result.get("detected_country", "??"),
+                "records": len(records),
+            })
+        except Exception as e:
+            file_summaries.append({"filename": f.filename, "error": str(e)})
+
+    canonical_columns = list(CANONICAL_FIELDS.keys()) + ["_source_file", "_source_country"]
+
+    return JSONResponse(content={
+        "total_files": len(file_summaries),
+        "total_records": len(all_records),
+        "countries": list(set(s.get("country", "??") for s in file_summaries if "error" not in s)),
+        "file_summaries": file_summaries,
+        "canonical_columns": canonical_columns,
+        "consolidated_preview": all_records[:20],
+        "consolidated_all": all_records,
     })

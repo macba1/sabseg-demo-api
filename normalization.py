@@ -429,6 +429,7 @@ def run_normalization(file_bytes: bytes, filename: str = "") -> dict:
         "records_clean": records_clean,
         "pct_clean": pct_clean,
         "normalized_preview": normalized.head(10).replace({np.nan: None}).to_dict(orient="records"),
+        "normalized_all": normalized.replace({np.nan: None}).to_dict(orient="records"),
         "original_columns": list(df.columns),
         "canonical_columns": list(normalized.columns),
     })
