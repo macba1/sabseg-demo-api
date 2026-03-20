@@ -126,6 +126,8 @@ async def normalize_batch(
         try:
             file_bytes = await f.read()
             result = run_normalization(file_bytes, f.filename)
+            # Strip heavy field — loaded on-demand via /api/normalize-consolidate
+            result.pop("normalized_all", None)
             results.append(result)
         except Exception as e:
             results.append({"filename": f.filename, "error": str(e)})
@@ -167,6 +169,8 @@ async def normalize_demo():
                 file_bytes = f.read()
             result = run_normalization(file_bytes, filename)
             result["label"] = label
+            # Strip heavy field — loaded on-demand via consolidate endpoint
+            result.pop("normalized_all", None)
             results.append(result)
         except Exception as e:
             results.append({"filename": filename, "error": str(e)})
@@ -181,6 +185,52 @@ async def normalize_demo():
         "total_quality_issues": total_issues,
         "countries_detected": countries,
         "results": results,
+    })
+
+
+@app.post("/api/normalize-demo-consolidate")
+async def normalize_demo_consolidate():
+    """
+    Consolidate demo brokerage data into a single unified dataset (on-demand).
+    """
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    demo_files = [
+        ("Pack_A_Correduria_Espana.xlsx", "Correduría España"),
+        ("Pack_B_Correduria_Portugal.xlsx", "Correduría Portugal"),
+        ("Pack_C_Correduria_Italia.xlsx", "Correduría Italia"),
+    ]
+
+    all_records = []
+    file_summaries = []
+
+    for filename, label in demo_files:
+        filepath = os.path.join(data_dir, filename)
+        if not os.path.exists(filepath):
+            file_summaries.append({"filename": label, "error": f"File not found: {filename}"})
+            continue
+        try:
+            with open(filepath, "rb") as f:
+                file_bytes = f.read()
+            result = run_normalization(file_bytes, filename)
+            records = result.get("normalized_all", [])
+            country = result.get("detected_country", "??")
+            for rec in records:
+                rec["_source_file"] = label
+                rec["_source_country"] = country
+            all_records.extend(records)
+            file_summaries.append({"filename": label, "country": country, "records": len(records)})
+        except Exception as e:
+            file_summaries.append({"filename": label, "error": str(e)})
+
+    canonical_columns = list(CANONICAL_FIELDS.keys()) + ["_source_file", "_source_country"]
+
+    return JSONResponse(content={
+        "total_files": len(file_summaries),
+        "total_records": len(all_records),
+        "countries": list(set(s.get("country", "??") for s in file_summaries if "error" not in s)),
+        "file_summaries": file_summaries,
+        "canonical_columns": canonical_columns,
+        "consolidated_preview": all_records[:20],
     })
 
 
@@ -220,5 +270,4 @@ async def normalize_consolidate(
         "file_summaries": file_summaries,
         "canonical_columns": canonical_columns,
         "consolidated_preview": all_records[:20],
-        "consolidated_all": all_records,
     })
