@@ -13,6 +13,7 @@ import os
 from reconciliation import run_reconciliation
 from normalization import run_normalization
 from reconciliation_sabseg import run_sabseg_reconciliation
+from data_quality import run_data_quality
 
 app = FastAPI(title="Sabseg Demo API", version="2.0.0")
 
@@ -219,3 +220,52 @@ async def normalize_demo():
         "countries_detected": countries,
         "results": results,
     })
+
+
+# ─── DATA QUALITY (Case 1) ───────────────────────────────────────────────────
+
+@app.post("/api/data-quality")
+async def data_quality(
+    files: List[UploadFile] = File(..., description="Ficheros de recibos a validar"),
+):
+    """Validate brokerage receipt files for data quality issues."""
+    try:
+        file_list = []
+        for f in files:
+            content = await f.read()
+            file_list.append((f.filename, content))
+        
+        result = run_data_quality(file_list)
+        return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/data-quality-demo")
+async def data_quality_demo():
+    """Run data quality validation with pre-loaded pilot files."""
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    
+    pilot_files = [
+        "PILOT_202602_Araytor.xlsx",
+        "PILOT_202602_Zurriola.xlsx",
+        "PILOT_2026_02_SEGURETXE.xlsx",
+        "PILOT_2026_01_ARRENTA.xlsx",
+        "PILOT_202602_ARRENTA.xlsx",
+    ]
+    
+    file_list = []
+    for fn in pilot_files:
+        fp = os.path.join(data_dir, fn)
+        if os.path.exists(fp):
+            with open(fp, "rb") as f:
+                file_list.append((fn, f.read()))
+    
+    if not file_list:
+        raise HTTPException(status_code=404, detail="Pilot files not found.")
+    
+    try:
+        result = run_data_quality(file_list)
+        return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
