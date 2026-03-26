@@ -7,11 +7,33 @@ y textos para informar a las corredurías donde no se puede corregir.
 """
 
 import pandas as pd
+import numpy as np
 import re
 import os
 from io import BytesIO
 from datetime import datetime
 from collections import Counter
+
+
+def _clean(val):
+    """Recursively convert pandas/numpy types to native Python for JSON serialization."""
+    if isinstance(val, dict):
+        return {k: _clean(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_clean(v) for v in val]
+    if isinstance(val, (pd.Timestamp, datetime)):
+        return val.isoformat()
+    if isinstance(val, (np.integer,)):
+        return int(val)
+    if isinstance(val, (np.floating,)):
+        return None if np.isnan(val) else float(val)
+    if isinstance(val, (np.bool_,)):
+        return bool(val)
+    if isinstance(val, (np.ndarray,)):
+        return _clean(val.tolist())
+    if isinstance(val, float) and (val != val):  # NaN check
+        return None
+    return val
 
 
 # ─── NIF VALIDATION ──────────────────────────────────────────────────────────
@@ -419,7 +441,7 @@ def validate_file(file_bytes, filename, mapping_data=None):
     auto_correctable = sum(1 for e in errors + corrections if e.get('correccion_auto'))
     needs_review = total_errors + total_warnings - auto_correctable
     
-    return {
+    return _clean({
         'filename': filename,
         'correduria': correduría,
         'data_sheet': data_sheet,
@@ -436,8 +458,8 @@ def validate_file(file_bytes, filename, mapping_data=None):
         'warnings': warnings,
         'corrections': corrections,
         'mapping_available': bool(mapping),
-        'preview': df.head(5).to_dict(orient='records'),
-    }
+        'preview': df.head(5).replace({np.nan: None}).to_dict(orient='records'),
+    })
 
 
 # ─── STRUCTURE DETECTION ─────────────────────────────────────────────────────
@@ -625,7 +647,7 @@ def run_data_quality(files):
     total_warnings = sum(r.get('total_warnings', 0) for r in results if 'error' not in r)
     auto_correctable = sum(r.get('auto_correctable', 0) for r in results if 'error' not in r)
     
-    return {
+    return _clean({
         'fecha_analisis': datetime.now().strftime('%d/%m/%Y %H:%M'),
         'total_files': len(results),
         'total_records': total_records,
@@ -635,7 +657,7 @@ def run_data_quality(files):
         'needs_manual_review': total_errors + total_warnings - auto_correctable,
         'results': results,
         'arrenta_comparison': arrenta_comparison,
-    }
+    })
 
 
 # ─── HELPERS ─────────────────────────────────────────────────────────────────
