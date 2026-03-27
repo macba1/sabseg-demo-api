@@ -434,3 +434,95 @@ async def qa_data_quality():
     qa_report = qa.run_data_quality_qa(dq_result)
     
     return JSONResponse(content=qa_report)
+
+
+# ─── LOGGED PROCESSING (with agent activity panel) ────────────────────────────
+
+@app.post("/api/reconcile-logged")
+async def reconcile_logged(
+    saldos: UploadFile = File(...),
+    estadisticas: List[UploadFile] = File(...),
+):
+    """Reconciliation with agent activity log."""
+    from logged_processing import run_reconciliation_logged
+    try:
+        saldos_bytes = await saldos.read()
+        stats_files = []
+        for f in estadisticas:
+            content = await f.read()
+            stats_files.append((f.filename, content))
+        result = run_reconciliation_logged(saldos_bytes, stats_files)
+        return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/demo-sabseg-logged")
+async def demo_sabseg_logged():
+    """Demo reconciliation with agent activity log."""
+    from logged_processing import run_reconciliation_logged
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    
+    saldos_path = os.path.join(data_dir, "Saldos_Contables_Ene_y_Feb_2026.xlsx")
+    with open(saldos_path, "rb") as f:
+        saldos_bytes = f.read()
+    
+    stats_files = []
+    for fn in os.listdir(data_dir):
+        if fn == "Saldos_Contables_Ene_y_Feb_2026.xlsx" or fn.startswith("PILOT") or fn.startswith("Pack") or fn.startswith("Modelo") or fn == "Piloto_IA_Errores.xlsx":
+            continue
+        fp = os.path.join(data_dir, fn)
+        if os.path.isfile(fp):
+            with open(fp, "rb") as f:
+                stats_files.append((fn, f.read()))
+    
+    try:
+        result = run_reconciliation_logged(saldos_bytes, stats_files)
+        return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/data-quality-logged")
+async def data_quality_logged(
+    files: List[UploadFile] = File(...),
+):
+    """Data quality validation with agent activity log."""
+    from logged_processing import run_data_quality_logged
+    try:
+        file_list = []
+        for f in files:
+            content = await f.read()
+            file_list.append((f.filename, content))
+        result = run_data_quality_logged(file_list)
+        return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/data-quality-demo-logged")
+async def data_quality_demo_logged():
+    """Demo data quality with agent activity log."""
+    from logged_processing import run_data_quality_logged
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    
+    pilot_files = [
+        "PILOT_202602_Araytor.xlsx",
+        "PILOT_202602_Zurriola.xlsx",
+        "PILOT_2026_02_SEGURETXE.xlsx",
+        "PILOT_2026_01_ARRENTA.xlsx",
+        "PILOT_202602_ARRENTA.xlsx",
+    ]
+    
+    file_list = []
+    for fn in pilot_files:
+        fp = os.path.join(data_dir, fn)
+        if os.path.exists(fp):
+            with open(fp, "rb") as f:
+                file_list.append((fn, f.read()))
+    
+    try:
+        result = run_data_quality_logged(file_list)
+        return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

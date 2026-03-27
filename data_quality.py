@@ -29,7 +29,7 @@ def _clean(obj):
         return None if np.isnan(obj) else float(obj)
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
-    if isinstance(obj, float) and (obj != obj):  # NaN check
+    if isinstance(obj, float) and (obj != obj):
         return None
     if obj is pd.NaT:
         return None
