@@ -31,7 +31,7 @@ def _clean(val):
         return bool(val)
     if isinstance(val, (np.ndarray,)):
         return _clean(val.tolist())
-    if isinstance(val, float) and (val != val):  # NaN check
+    if isinstance(val, float) and (val != val):
         return None
     return val
 

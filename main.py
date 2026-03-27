@@ -14,6 +14,7 @@ from reconciliation import run_reconciliation
 from normalization import run_normalization
 from reconciliation_sabseg import run_sabseg_reconciliation
 from data_quality import run_data_quality
+from corrections import apply_corrections, generate_broker_report, generate_all_reports
 
 app = FastAPI(title="Sabseg Demo API", version="2.0.0")
 
@@ -269,3 +270,106 @@ async def data_quality_demo():
         return JSONResponse(content=result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# ─── CORRECTIONS + REPORTS ────────────────────────────────────────────────────
+
+@app.post("/api/apply-corrections")
+async def api_apply_corrections(
+    files: List[UploadFile] = File(...),
+):
+    """Apply auto-corrections to uploaded files. Returns corrected files + report."""
+    results = []
+    for f in files:
+        content = await f.read()
+        result = apply_corrections(content, f.filename)
+        if 'corrected_file' in result:
+            # Don't send raw bytes in JSON, just the stats
+            result.pop('corrected_file')
+        results.append(result)
+    
+    total_corrections = sum(r.get('total_corrections', 0) for r in results if 'error' not in r)
+    total_remaining = sum(r.get('total_remaining', 0) for r in results if 'error' not in r)
+    
+    return JSONResponse(content={
+        'total_files': len(results),
+        'total_corrections': total_corrections,
+        'total_remaining': total_remaining,
+        'results': results,
+    })
+
+
+@app.post("/api/apply-corrections-demo")
+async def api_apply_corrections_demo():
+    """Apply corrections to pilot files and return results."""
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    pilot_files = [
+        "PILOT_202602_Araytor.xlsx",
+        "PILOT_202602_Zurriola.xlsx",
+        "PILOT_2026_02_SEGURETXE.xlsx",
+        "PILOT_2026_01_ARRENTA.xlsx",
+        "PILOT_202602_ARRENTA.xlsx",
+    ]
+    
+    results = []
+    for fn in pilot_files:
+        fp = os.path.join(data_dir, fn)
+        if os.path.exists(fp):
+            with open(fp, "rb") as f:
+                result = apply_corrections(f.read(), fn)
+            if 'corrected_file' in result:
+                result.pop('corrected_file')
+            results.append(result)
+    
+    total_corrections = sum(r.get('total_corrections', 0) for r in results if 'error' not in r)
+    total_remaining = sum(r.get('total_remaining', 0) for r in results if 'error' not in r)
+    
+    return JSONResponse(content={
+        'total_files': len(results),
+        'total_corrections': total_corrections,
+        'total_remaining': total_remaining,
+        'results': results,
+    })
+
+
+@app.post("/api/generate-reports")
+async def api_generate_reports(
+    files: List[UploadFile] = File(...),
+):
+    """Generate broker reports/emails for issues that need manual review."""
+    from data_quality import validate_file
+    
+    validation_results = []
+    for f in files:
+        content = await f.read()
+        result = validate_file(content, f.filename)
+        validation_results.append(result)
+    
+    reports = generate_all_reports(validation_results)
+    return JSONResponse(content={'reports': reports})
+
+
+@app.post("/api/generate-reports-demo")
+async def api_generate_reports_demo():
+    """Generate broker reports for pilot files."""
+    from data_quality import validate_file
+    
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    pilot_files = [
+        "PILOT_202602_Araytor.xlsx",
+        "PILOT_202602_Zurriola.xlsx",
+        "PILOT_2026_02_SEGURETXE.xlsx",
+        "PILOT_2026_01_ARRENTA.xlsx",
+        "PILOT_202602_ARRENTA.xlsx",
+    ]
+    
+    validation_results = []
+    for fn in pilot_files:
+        fp = os.path.join(data_dir, fn)
+        if os.path.exists(fp):
+            with open(fp, "rb") as f:
+                result = validate_file(f.read(), fn)
+            validation_results.append(result)
+    
+    reports = generate_all_reports(validation_results)
+    return JSONResponse(content={'reports': reports})
