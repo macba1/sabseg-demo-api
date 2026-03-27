@@ -5,10 +5,11 @@ Aplica correcciones a los ficheros y genera informes para corredurías.
 """
 
 import pandas as pd
+import numpy as np
 import re
 import io
 from datetime import datetime
-from data_quality import detect_structure, validate_nif, NIF_LETTER_TABLE, _find_column, _find_columns
+from data_quality import detect_structure, validate_nif, NIF_LETTER_TABLE, _find_column, _find_columns, _clean
 
 
 def apply_corrections(file_bytes, filename):
@@ -227,7 +228,7 @@ def apply_corrections(file_bytes, filename):
     total_corrections = sum(c['cantidad'] for c in corrections_applied)
     total_remaining = sum(r['cantidad'] for r in remaining_issues)
     
-    return {
+    return _clean({
         'filename': filename,
         'correduria': correduria,
         'total_records': len(df),
@@ -236,7 +237,7 @@ def apply_corrections(file_bytes, filename):
         'corrections_applied': corrections_applied,
         'remaining_issues': remaining_issues,
         'corrected_file': corrected_bytes,
-    }
+    })
 
 
 def generate_broker_report(validation_result):

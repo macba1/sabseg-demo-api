@@ -42,7 +42,12 @@ NIF_LETTER_TABLE = "TRWAGMYFPDXBNJZSQVHLCKE"
 
 def validate_nif(nif_str):
     """Validate Spanish NIF/CIF/NIE. Returns (is_valid, error_type, suggestion)."""
-    if not nif_str or pd.isna(nif_str):
+    try:
+        if nif_str is None or pd.isna(nif_str):
+            return False, "vacio", "Asignar NIF genérico"
+    except (ValueError, TypeError):
+        pass
+    if not nif_str:
         return False, "vacio", "Asignar NIF genérico"
     
     nif = str(nif_str).strip()
