@@ -15,25 +15,30 @@ from datetime import datetime
 from collections import Counter
 
 
-def _clean(val):
-    """Recursively convert pandas/numpy types to native Python for JSON serialization."""
-    if isinstance(val, dict):
-        return {k: _clean(v) for k, v in val.items()}
-    if isinstance(val, list):
-        return [_clean(v) for v in val]
-    if isinstance(val, (pd.Timestamp, datetime)):
-        return val.isoformat()
-    if isinstance(val, (np.integer,)):
-        return int(val)
-    if isinstance(val, (np.floating,)):
-        return None if np.isnan(val) else float(val)
-    if isinstance(val, (np.bool_,)):
-        return bool(val)
-    if isinstance(val, (np.ndarray,)):
-        return _clean(val.tolist())
-    if isinstance(val, float) and (val != val):
+def _clean(obj):
+    """Recursively convert pandas/numpy types to JSON-safe Python types."""
+    if isinstance(obj, dict):
+        return {k: _clean(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_clean(v) for v in obj]
+    if isinstance(obj, pd.Timestamp):
+        return obj.isoformat()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return None if np.isnan(obj) else float(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, float) and (obj != obj):  # NaN check
         return None
-    return val
+    if obj is pd.NaT:
+        return None
+    try:
+        if pd.isna(obj):
+            return None
+    except (ValueError, TypeError):
+        pass
+    return obj
 
 
 # ─── NIF VALIDATION ──────────────────────────────────────────────────────────

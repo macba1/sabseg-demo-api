@@ -5,7 +5,6 @@ Aplica correcciones a los ficheros y genera informes para corredurías.
 """
 
 import pandas as pd
-import numpy as np
 import re
 import io
 from datetime import datetime

@@ -373,3 +373,64 @@ async def api_generate_reports_demo():
     
     reports = generate_all_reports(validation_results)
     return JSONResponse(content={'reports': reports})
+
+
+# ─── QA AGENTS ────────────────────────────────────────────────────────────────
+
+@app.post("/api/qa-reconciliation")
+async def qa_reconciliation():
+    """Run QA agents on reconciliation results (uses demo data)."""
+    from qa_agents import QAOrchestrator
+    
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    saldos_path = os.path.join(data_dir, "Saldos_Contables_Ene_y_Feb_2026.xlsx")
+    
+    with open(saldos_path, "rb") as f:
+        saldos_bytes = f.read()
+    
+    stats_files = []
+    for fn in os.listdir(data_dir):
+        if fn == "Saldos_Contables_Ene_y_Feb_2026.xlsx" or fn.startswith("PILOT") or fn.startswith("Pack") or fn.startswith("Modelo") or fn == "Piloto_IA_Errores.xlsx":
+            continue
+        fp = os.path.join(data_dir, fn)
+        if os.path.isfile(fp):
+            with open(fp, "rb") as f:
+                stats_files.append((fn, f.read()))
+    
+    from reconciliation_sabseg import run_sabseg_reconciliation
+    recon_result = run_sabseg_reconciliation(saldos_bytes, stats_files)
+    
+    qa = QAOrchestrator()
+    qa_report = qa.run_reconciliation_qa(recon_result)
+    
+    return JSONResponse(content=qa_report)
+
+
+@app.post("/api/qa-data-quality")
+async def qa_data_quality():
+    """Run QA agents on data quality results (uses demo data)."""
+    from qa_agents import QAOrchestrator
+    from data_quality import run_data_quality
+    
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    pilot_files = [
+        "PILOT_202602_Araytor.xlsx",
+        "PILOT_202602_Zurriola.xlsx",
+        "PILOT_2026_02_SEGURETXE.xlsx",
+        "PILOT_2026_01_ARRENTA.xlsx",
+        "PILOT_202602_ARRENTA.xlsx",
+    ]
+    
+    file_list = []
+    for fn in pilot_files:
+        fp = os.path.join(data_dir, fn)
+        if os.path.exists(fp):
+            with open(fp, "rb") as f:
+                file_list.append((fn, f.read()))
+    
+    dq_result = run_data_quality(file_list)
+    
+    qa = QAOrchestrator()
+    qa_report = qa.run_data_quality_qa(dq_result)
+    
+    return JSONResponse(content=qa_report)
