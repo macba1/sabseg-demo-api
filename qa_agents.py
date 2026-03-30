@@ -47,6 +47,11 @@ class QAOrchestrator:
             AgentPeriodCoverage().check_reconciliation(reconciliation_result)
         )
         
+        # Agent 7: False positive detection
+        self.results.append(
+            AgentFalsePositiveDetector().check_reconciliation(reconciliation_result)
+        )
+        
         return self._compile_report("Reconciliación Contable")
     
     def run_data_quality_qa(self, dq_result, correction_result=None, report_result=None):
@@ -66,6 +71,11 @@ class QAOrchestrator:
         # Agent 3: Numerical consistency for DQ
         self.results.append(
             AgentNumericalConsistency().check_data_quality(dq_result)
+        )
+        
+        # Agent 7: False positive detection
+        self.results.append(
+            AgentFalsePositiveDetector().check_data_quality(dq_result)
         )
         
         # Agent 5b: Correction verification
@@ -790,6 +800,198 @@ class AgentReportVerification:
             })
         
         return self._summarize('Verificación de informes', checks)
+    
+    def _summarize(self, agent_name, checks):
+        passed = sum(1 for c in checks if c['status'] == 'pass')
+        warnings = sum(1 for c in checks if c['status'] == 'warning')
+        errors = sum(1 for c in checks if c['status'] == 'error')
+        return {
+            'agent': agent_name,
+            'checks_run': len(checks),
+            'checks_passed': passed,
+            'warnings': warnings,
+            'errors': errors,
+            'checks': checks,
+        }
+
+
+# ─── AGENTE 7: DETECTOR DE FALSOS POSITIVOS Y COHERENCIA ─────────────────────
+
+class AgentFalsePositiveDetector:
+    """
+    Detecta errores y warnings que son falsos positivos o incoherentes.
+    Ejemplos:
+    - Alertar de columnas faltantes en un fichero que usa otro esquema (Seguretxe)
+    - Errores de cantidad desproporcionada que sugieren un problema en el detector
+    - Warnings duplicados o contradictorios
+    - Errores que no aplican al tipo de fichero
+    """
+    
+    # Schemas conocidos por correduría
+    KNOWN_SCHEMAS = {
+        'seguretxe': {
+            'format': 'propio',
+            'expected_cols': ['F. Producc.', 'F. Efecto', 'Prima', 'Com, Bruta', 'Nº Póliza'],
+            'skip_checks': [4],  # No buscar columnas de Plantilla Report
+        },
+        'araytor': {'format': 'plantilla_report', 'expected_cols': ['Correduria', 'NIF', 'FechaFacturacion']},
+        'zurriola': {'format': 'plantilla_report', 'expected_cols': ['Correduria', 'NIF', 'FechaFacturacion']},
+        'arrenta': {'format': 'plantilla_report_variante', 'expected_cols': ['Correduria', 'NIF']},
+    }
+    
+    def check_data_quality(self, dq_result):
+        checks = []
+        
+        for file_result in dq_result.get('results', []):
+            if 'error' in file_result:
+                continue
+            
+            correduria = (file_result.get('correduria', '') or '').lower()
+            filename = file_result.get('filename', '')
+            total_records = file_result.get('total_records', 0)
+            all_issues = file_result.get('errors', []) + file_result.get('warnings', [])
+            
+            # ── Check 1: Columnas faltantes en esquema no estándar ────────
+            schema = self.KNOWN_SCHEMAS.get(correduria, {})
+            skip_checks = schema.get('skip_checks', [])
+            
+            for issue in all_issues:
+                error_num = issue.get('error_num')
+                if error_num in skip_checks:
+                    checks.append({
+                        'check': f'Falso positivo en {correduria}: Error {error_num}',
+                        'status': 'error',
+                        'detail': (f'El error "{issue["tipo"]}" no aplica a {correduria} porque usa esquema '
+                                   f'"{schema.get("format", "desconocido")}". Este warning no debería mostrarse.'),
+                    })
+            
+            # ── Check 2: Errores con cantidad = total de registros ────────
+            # Si un error afecta al 100% de los registros, probablemente es
+            # un problema del detector, no del fichero
+            for issue in all_issues:
+                cantidad = issue.get('cantidad', 0)
+                if cantidad > 0 and total_records > 0:
+                    pct = cantidad / total_records * 100
+                    if pct > 95 and issue.get('error_num') not in (6, 20):
+                        # Error 6 (campo equivocado) y 20 (fuera de periodo) pueden afectar al 100% legítimamente
+                        checks.append({
+                            'check': f'Posible falso positivo en {correduria}: {issue["tipo"]}',
+                            'status': 'warning',
+                            'detail': (f'"{issue["tipo"]}" afecta a {cantidad}/{total_records} registros ({pct:.0f}%). '
+                                       f'Cuando un error afecta al 100% de los registros, puede ser un problema del '
+                                       f'detector (umbral mal calibrado) en vez de un error real en los datos.'),
+                        })
+            
+            # ── Check 3: Errores contradictorios ──────────────────────────
+            error_types = [i.get('tipo', '') for i in all_issues]
+            # Si hay "NIF vacío" y "NIF no normalizado" con cantidades que suman más que el total
+            nif_vacio = sum(i.get('cantidad', 0) for i in all_issues if 'vacío' in str(i.get('tipo', '')).lower())
+            nif_no_norm = sum(i.get('cantidad', 0) for i in all_issues if 'normalizado' in str(i.get('tipo', '')).lower() and 'nif' in str(i.get('tipo', '')).lower())
+            if nif_vacio + nif_no_norm > total_records and total_records > 0:
+                checks.append({
+                    'check': f'Conteo NIF inconsistente en {correduria}',
+                    'status': 'warning',
+                    'detail': (f'NIFs vacíos ({nif_vacio}) + NIFs no normalizados ({nif_no_norm}) = {nif_vacio + nif_no_norm}, '
+                               f'pero solo hay {total_records} registros. Posible doble conteo.'),
+                })
+            
+            # ── Check 4: Warnings de "recibos fuera de periodo" desproporcionados ─
+            fuera_periodo = [i for i in all_issues if i.get('error_num') == 20]
+            for fp in fuera_periodo:
+                if fp.get('cantidad', 0) > total_records * 0.8:
+                    checks.append({
+                        'check': f'Periodo sospechoso en {correduria}',
+                        'status': 'warning',
+                        'detail': (f'{fp["cantidad"]}/{total_records} recibos ({fp["cantidad"]/total_records*100:.0f}%) '
+                                   f'están "fuera de periodo". Esto puede indicar que el fichero cubre un periodo '
+                                   f'diferente al esperado, o que la columna de fecha usada no es la correcta.'),
+                    })
+            
+            # ── Check 5: Duplicados desproporcionados ─────────────────────
+            dupes = [i for i in all_issues if i.get('error_num') == 17]
+            for d in dupes:
+                if d.get('cantidad', 0) > total_records * 0.5:
+                    checks.append({
+                        'check': f'Duplicados sospechosos en {correduria}',
+                        'status': 'warning',
+                        'detail': (f'{d["cantidad"]}/{total_records} registros ({d["cantidad"]/total_records*100:.0f}%) '
+                                   f'marcados como posibles duplicados. Un porcentaje tan alto sugiere que el criterio '
+                                   f'de duplicación (póliza + fecha) puede ser demasiado amplio para este fichero.'),
+                    })
+        
+        if not checks:
+            checks.append({
+                'check': 'Coherencia de resultados',
+                'status': 'pass',
+                'detail': 'No se detectaron falsos positivos ni inconsistencias en los resultados.',
+            })
+        
+        return self._summarize('Detector de falsos positivos', checks)
+    
+    def check_reconciliation(self, result):
+        checks = []
+        
+        recon = result.get('reconciliacion', [])
+        
+        # ── Check 1: Empresas con diferencia > 100% ──────────────────────
+        extreme = [r for r in recon if abs(r.get('pct', 0)) > 100 and r.get('contabilidad', 0) > 0]
+        if extreme:
+            empresas_extreme = set(r['empresa'] for r in extreme)
+            checks.append({
+                'check': 'Diferencias extremas (>100%)',
+                'status': 'warning',
+                'detail': (f'{len(empresas_extreme)} empresa(s) con diferencia >100%. '
+                           f'Esto puede indicar un error de mapping o datos de otro periodo mezclados: '
+                           f'{list(empresas_extreme)[:3]}'),
+            })
+        
+        # ── Check 2: Empresa con signo invertido entre meses ──────────────
+        empresas_meses = {}
+        for r in recon:
+            key = (r['empresa'], r['cuenta'])
+            if key not in empresas_meses:
+                empresas_meses[key] = []
+            empresas_meses[key].append(r)
+        
+        sign_inversions = []
+        for key, records in empresas_meses.items():
+            if len(records) >= 2:
+                diffs = [r['diferencia'] for r in records]
+                if any(d > 0 for d in diffs) and any(d < 0 for d in diffs):
+                    total_abs = sum(abs(d) for d in diffs)
+                    total_net = abs(sum(diffs))
+                    if total_abs > 1000 and total_net < total_abs * 0.3:
+                        sign_inversions.append(key)
+        
+        if sign_inversions:
+            checks.append({
+                'check': 'Inversión de signo entre meses',
+                'status': 'warning',
+                'detail': (f'{len(sign_inversions)} empresa(s)/cuenta(s) con diferencia positiva en un mes '
+                           f'y negativa en el otro (se compensan). Puede indicar desfase temporal en la contabilización: '
+                           f'{[f"{e[:25]} ({c})" for e, c in sign_inversions[:3]]}'),
+            })
+        
+        # ── Check 3: Empresas con estadística > 0 pero contabilidad = 0 ──
+        no_contab = [r for r in recon if r.get('contabilidad', 0) == 0 and r.get('estadistica', 0) > 1000]
+        if no_contab:
+            empresas_nc = set(r['empresa'] for r in no_contab)
+            checks.append({
+                'check': 'Estadísticas sin contrapartida contable',
+                'status': 'warning',
+                'detail': (f'{len(empresas_nc)} empresa(s) con importes en estadísticas pero sin saldo contable. '
+                           f'Verificar si se contabilizan bajo otra entidad o si falta algún asiento: '
+                           f'{list(empresas_nc)[:3]}'),
+            })
+        
+        if not checks:
+            checks.append({
+                'check': 'Coherencia de resultados',
+                'status': 'pass',
+                'detail': 'No se detectaron falsos positivos ni inconsistencias en la reconciliación.',
+            })
+        
+        return self._summarize('Detector de falsos positivos', checks)
     
     def _summarize(self, agent_name, checks):
         passed = sum(1 for c in checks if c['status'] == 'pass')

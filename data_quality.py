@@ -140,22 +140,25 @@ def validate_file(file_bytes, filename, mapping_data=None):
             })
     
     # ── ERROR 4: Cambio de nombre de columnas ────────────────────────────
-    expected_cols = ['Correduria', 'NIF', 'NumeroPolizaCompania', 'NumeroPolizaInterno',
-                     'NumeroReciboCompania', 'NumeroReciboInterno', 'Tipo', 'Gestion',
-                     'Duracion', 'Situacion', 'FechaFacturacion', 'FechaEfecto',
-                     'PrimaNeta', 'ComisionCorreduria', 'ComisionPrimaNeta', 'ComisionComplementaria']
-    actual_cols = list(df.columns)
-    missing = [c for c in expected_cols if not _find_column(df, [c])]
-    extra = [c for c in actual_cols if c not in expected_cols and not c.startswith('_')]
-    if missing:
-        error_id += 1
-        warnings.append({
-            'id': error_id, 'tipo': 'Columnas esperadas no encontradas', 'error_num': 4,
-            'severidad': 'Alta', 'campo': 'Estructura',
-            'cantidad': len(missing), 'valores': missing,
-            'detalle': f"Columnas no encontradas: {', '.join(missing)}",
-            'sugerencia': 'Verificar si han cambiado de nombre o se han eliminado',
-        })
+    # Only check against standard columns for files that use Plantilla Report format
+    # Seguretxe and AGRO files use their own schemas — that's expected, not an error
+    if correduría and correduría.lower() not in ('seguretxe',):
+        expected_cols = ['Correduria', 'NIF', 'NumeroPolizaCompania', 'NumeroPolizaInterno',
+                         'NumeroReciboCompania', 'NumeroReciboInterno', 'Tipo', 'Gestion',
+                         'Duracion', 'Situacion', 'FechaFacturacion', 'FechaEfecto',
+                         'PrimaNeta', 'ComisionCorreduria', 'ComisionPrimaNeta', 'ComisionComplementaria']
+        actual_cols = list(df.columns)
+        missing = [c for c in expected_cols if not _find_column(df, [c])]
+        extra = [c for c in actual_cols if c not in expected_cols and not c.startswith('_')]
+        if missing:
+            error_id += 1
+            warnings.append({
+                'id': error_id, 'tipo': 'Columnas esperadas no encontradas', 'error_num': 4,
+                'severidad': 'Alta', 'campo': 'Estructura',
+                'cantidad': len(missing), 'valores': missing,
+                'detalle': f"Columnas no encontradas: {', '.join(missing)}",
+                'sugerencia': 'Verificar si han cambiado de nombre o se han eliminado',
+            })
     
     # ── ERROR 5: Valores no normalizados ─────────────────────────────────
     tipo_col = _find_column(df, ['Tipo'])
