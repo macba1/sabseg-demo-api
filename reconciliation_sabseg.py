@@ -328,33 +328,51 @@ def parse_agro(file_bytes, empresa, filename, months=[1, 2]):
 
 
 def parse_maura_pdf(file_bytes):
-    """Extract commission data from MAURA PDF (email screenshot)."""
-    # Write temp file
+    """Extract commission data from MAURA PDF.
+    The PDF is typically an email screenshot with a table like:
+        COMISIONES    13.912,11 €    3.916,50 €
+    Where the first amount is January and second is February.
+    Also looks for the header row to detect month columns.
+    """
     tmp = '/tmp/maura_temp.pdf'
     with open(tmp, 'wb') as f:
         f.write(file_bytes)
     
+    text = ''
     try:
         result = subprocess.run(['pdftotext', '-layout', tmp, '-'], capture_output=True, text=True, timeout=10)
         text = result.stdout
     except:
-        # Fallback: hardcoded from known values
-        return [
-            {'empresa': 'Maura Brokers, S.L.', 'mes': 1, 'c705': 13912.11, 'c623': 0, 'recibos': 0, 'source': 'MAURA.pdf'},
-            {'empresa': 'Maura Brokers, S.L.', 'mes': 2, 'c705': 3916.50, 'c623': 0, 'recibos': 0, 'source': 'MAURA.pdf'},
-        ]
+        pass
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
     
-    # Extract amounts from PDF text
+    if not text.strip():
+        return []
+    
     results = []
-    # Look for "COMISIONES" line followed by amounts
     lines = text.split('\n')
-    for i, line in enumerate(lines):
+    
+    # Step 1: Detect which months are in the header (ENERO 2026, FEBRERO 2026, etc.)
+    months_detected = []
+    for line in lines:
+        line_upper = line.upper()
+        for month_num, month_name in [(1, 'ENERO'), (2, 'FEBRERO'), (3, 'MARZO'), (4, 'ABRIL'),
+                                       (5, 'MAYO'), (6, 'JUNIO'), (7, 'JULIO'), (8, 'AGOSTO'),
+                                       (9, 'SEPTIEMBRE'), (10, 'OCTUBRE'), (11, 'NOVIEMBRE'), (12, 'DICIEMBRE')]:
+            if month_name in line_upper and '2026' in line_upper:
+                if month_num not in months_detected:
+                    months_detected.append(month_num)
+    
+    if not months_detected:
+        months_detected = [1, 2]  # Default: assume Jan + Feb
+    
+    # Step 2: Find the COMISIONES line and extract amounts
+    for line in lines:
         if 'COMISIONES' in line.upper() and '€' in line:
-            # Extract amounts like "13.912,11 €" and "3.916,50 €"
-            amounts = re.findall(r'([\d.,]+)\s*€', line)
+            # Extract all amounts in format "13.912,11 €" or "3.916,50€"
+            amounts = re.findall(r'([\d]+(?:\.[\d]{3})*(?:,[\d]{1,2}))\s*€', line)
             parsed = []
             for a in amounts:
                 try:
@@ -362,19 +380,52 @@ def parse_maura_pdf(file_bytes):
                     parsed.append(val)
                 except:
                     pass
-            if len(parsed) >= 2:
-                results.append({'empresa': 'Maura Brokers, S.L.', 'mes': 1, 'c705': parsed[0], 'c623': 0, 'recibos': 0, 'source': 'MAURA.pdf'})
-                results.append({'empresa': 'Maura Brokers, S.L.', 'mes': 2, 'c705': parsed[1], 'c623': 0, 'recibos': 0, 'source': 'MAURA.pdf'})
+            
+            # Map amounts to months
+            for i, val in enumerate(parsed):
+                if i < len(months_detected):
+                    results.append({
+                        'empresa': 'Maura Brokers, S.L.',
+                        'mes': months_detected[i],
+                        'c705': val,
+                        'c623': 0,
+                        'recibos': 0,
+                        'source': 'MAURA.pdf',
+                    })
+            
+            if results:
                 return results
-            elif len(parsed) == 1:
-                results.append({'empresa': 'Maura Brokers, S.L.', 'mes': 1, 'c705': parsed[0], 'c623': 0, 'recibos': 0, 'source': 'MAURA.pdf'})
     
-    # Fallback
-    if not results:
-        results = [
-            {'empresa': 'Maura Brokers, S.L.', 'mes': 1, 'c705': 13912.11, 'c623': 0, 'recibos': 0, 'source': 'MAURA.pdf'},
-            {'empresa': 'Maura Brokers, S.L.', 'mes': 2, 'c705': 3916.50, 'c623': 0, 'recibos': 0, 'source': 'MAURA.pdf'},
-        ]
+    # Step 3: If COMISIONES line not found, look for any line with € amounts
+    # after "MAURA" or "FACTURACIÓN"
+    in_maura_section = False
+    for line in lines:
+        if 'MAURA' in line.upper() or 'FACTURACIÓN' in line.upper():
+            in_maura_section = True
+            continue
+        if in_maura_section and '€' in line:
+            amounts = re.findall(r'([\d]+(?:\.[\d]{3})*(?:,[\d]{1,2}))\s*€', line)
+            parsed = []
+            for a in amounts:
+                try:
+                    val = float(a.replace('.', '').replace(',', '.'))
+                    if val > 100:  # Filter out tiny amounts that might be noise
+                        parsed.append(val)
+                except:
+                    pass
+            
+            if len(parsed) >= 2:
+                for i, val in enumerate(parsed[:len(months_detected)]):
+                    results.append({
+                        'empresa': 'Maura Brokers, S.L.',
+                        'mes': months_detected[i],
+                        'c705': val,
+                        'c623': 0,
+                        'recibos': 0,
+                        'source': 'MAURA.pdf',
+                    })
+                return results
+    
     return results
 
 
