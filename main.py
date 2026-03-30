@@ -527,3 +527,22 @@ async def data_quality_demo_logged():
         return JSONResponse(content=clean_for_json(result))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── AUDIT REPORT ─────────────────────────────────────────────────────────────
+
+@app.get("/api/audit-report")
+async def audit_report():
+    """Generate audit report for manual verification of data extraction."""
+    from audit_report import generate_audit_report, generate_spot_checks
+    from json_cleaner import clean_for_json
+    
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    
+    report = generate_audit_report(data_dir)
+    spots = generate_spot_checks(data_dir)
+    
+    return JSONResponse(content=clean_for_json({
+        'audit_report': report,
+        'spot_checks': spots,
+    }))
