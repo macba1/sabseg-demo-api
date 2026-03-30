@@ -15,6 +15,7 @@ from normalization import run_normalization
 from reconciliation_sabseg import run_sabseg_reconciliation
 from data_quality import run_data_quality
 from corrections import apply_corrections, generate_broker_report, generate_all_reports
+from json_cleaner import clean_for_json
 
 app = FastAPI(title="Sabseg Demo API", version="2.0.0")
 
@@ -50,7 +51,7 @@ async def reconcile(
         result = run_reconciliation(bytes_a, bytes_b)
         if "error" in result:
             raise HTTPException(status_code=422, detail=result["error"])
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except HTTPException:
         raise
     except Exception as e:
@@ -70,7 +71,7 @@ async def demo():
         with open(file_b_path, "rb") as f:
             bytes_b = f.read()
         result = run_reconciliation(bytes_a, bytes_b)
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -98,7 +99,7 @@ async def reconcile_sabseg(
         if "error" in result:
             raise HTTPException(status_code=422, detail=result["error"])
         
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except HTTPException:
         raise
     except Exception as e:
@@ -147,7 +148,7 @@ async def demo_sabseg():
     
     try:
         result = run_sabseg_reconciliation(saldos_bytes, stats_files)
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
@@ -159,7 +160,7 @@ async def normalize(file: UploadFile = File(...)):
     try:
         file_bytes = await file.read()
         result = run_normalization(file_bytes, file.filename)
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -179,13 +180,13 @@ async def normalize_batch(files: List[UploadFile] = File(...)):
     total_issues = sum(r.get("total_quality_issues", 0) for r in results if "error" not in r)
     countries = [r.get("detected_country", "??") for r in results if "error" not in r]
     
-    return JSONResponse(content={
+    return JSONResponse(content=clean_for_json({
         "total_files": len(results),
         "total_records": total_records,
         "total_quality_issues": total_issues,
         "countries_detected": countries,
         "results": results,
-    })
+    }))
 
 
 @app.post("/api/normalize-demo")
@@ -214,13 +215,13 @@ async def normalize_demo():
     total_issues = sum(r.get("total_quality_issues", 0) for r in results if "error" not in r)
     countries = [r.get("detected_country", "??") for r in results if "error" not in r]
 
-    return JSONResponse(content={
+    return JSONResponse(content=clean_for_json({
         "total_files": len(results),
         "total_records": total_records,
         "total_quality_issues": total_issues,
         "countries_detected": countries,
         "results": results,
-    })
+    }))
 
 
 # ─── DATA QUALITY (Case 1) ───────────────────────────────────────────────────
@@ -237,7 +238,7 @@ async def data_quality(
             file_list.append((f.filename, content))
         
         result = run_data_quality(file_list)
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
@@ -267,7 +268,7 @@ async def data_quality_demo():
     
     try:
         result = run_data_quality(file_list)
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
@@ -291,12 +292,12 @@ async def api_apply_corrections(
     total_corrections = sum(r.get('total_corrections', 0) for r in results if 'error' not in r)
     total_remaining = sum(r.get('total_remaining', 0) for r in results if 'error' not in r)
     
-    return JSONResponse(content={
+    return JSONResponse(content=clean_for_json({
         'total_files': len(results),
         'total_corrections': total_corrections,
         'total_remaining': total_remaining,
         'results': results,
-    })
+    }))
 
 
 @app.post("/api/apply-corrections-demo")
@@ -324,12 +325,12 @@ async def api_apply_corrections_demo():
     total_corrections = sum(r.get('total_corrections', 0) for r in results if 'error' not in r)
     total_remaining = sum(r.get('total_remaining', 0) for r in results if 'error' not in r)
     
-    return JSONResponse(content={
+    return JSONResponse(content=clean_for_json({
         'total_files': len(results),
         'total_corrections': total_corrections,
         'total_remaining': total_remaining,
         'results': results,
-    })
+    }))
 
 
 @app.post("/api/generate-reports")
@@ -346,7 +347,7 @@ async def api_generate_reports(
         validation_results.append(result)
     
     reports = generate_all_reports(validation_results)
-    return JSONResponse(content={'reports': reports})
+    return JSONResponse(content=clean_for_json({'reports': reports}))
 
 
 @app.post("/api/generate-reports-demo")
@@ -372,7 +373,7 @@ async def api_generate_reports_demo():
             validation_results.append(result)
     
     reports = generate_all_reports(validation_results)
-    return JSONResponse(content={'reports': reports})
+    return JSONResponse(content=clean_for_json({'reports': reports}))
 
 
 # ─── QA AGENTS ────────────────────────────────────────────────────────────────
@@ -403,7 +404,7 @@ async def qa_reconciliation():
     qa = QAOrchestrator()
     qa_report = qa.run_reconciliation_qa(recon_result)
     
-    return JSONResponse(content=qa_report)
+    return JSONResponse(content=clean_for_json(qa_report))
 
 
 @app.post("/api/qa-data-quality")
@@ -433,7 +434,7 @@ async def qa_data_quality():
     qa = QAOrchestrator()
     qa_report = qa.run_data_quality_qa(dq_result)
     
-    return JSONResponse(content=qa_report)
+    return JSONResponse(content=clean_for_json(qa_report))
 
 
 # ─── LOGGED PROCESSING (with agent activity panel) ────────────────────────────
@@ -452,7 +453,7 @@ async def reconcile_logged(
             content = await f.read()
             stats_files.append((f.filename, content))
         result = run_reconciliation_logged(saldos_bytes, stats_files)
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -478,7 +479,7 @@ async def demo_sabseg_logged():
     
     try:
         result = run_reconciliation_logged(saldos_bytes, stats_files)
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -495,7 +496,7 @@ async def data_quality_logged(
             content = await f.read()
             file_list.append((f.filename, content))
         result = run_data_quality_logged(file_list)
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -523,6 +524,6 @@ async def data_quality_demo_logged():
     
     try:
         result = run_data_quality_logged(file_list)
-        return JSONResponse(content=result)
+        return JSONResponse(content=clean_for_json(result))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -7,38 +7,11 @@ y textos para informar a las corredurías donde no se puede corregir.
 """
 
 import pandas as pd
-import numpy as np
 import re
 import os
 from io import BytesIO
 from datetime import datetime
 from collections import Counter
-
-
-def _clean(obj):
-    """Recursively convert pandas/numpy types to JSON-safe Python types."""
-    if isinstance(obj, dict):
-        return {k: _clean(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_clean(v) for v in obj]
-    if isinstance(obj, pd.Timestamp):
-        return obj.isoformat()
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return None if np.isnan(obj) else float(obj)
-    if isinstance(obj, (np.bool_,)):
-        return bool(obj)
-    if isinstance(obj, float) and (obj != obj):
-        return None
-    if obj is pd.NaT:
-        return None
-    try:
-        if pd.isna(obj):
-            return None
-    except (ValueError, TypeError):
-        pass
-    return obj
 
 
 # ─── NIF VALIDATION ──────────────────────────────────────────────────────────
@@ -47,12 +20,7 @@ NIF_LETTER_TABLE = "TRWAGMYFPDXBNJZSQVHLCKE"
 
 def validate_nif(nif_str):
     """Validate Spanish NIF/CIF/NIE. Returns (is_valid, error_type, suggestion)."""
-    try:
-        if nif_str is None or pd.isna(nif_str):
-            return False, "vacio", "Asignar NIF genérico"
-    except (ValueError, TypeError):
-        pass
-    if not nif_str:
+    if not nif_str or pd.isna(nif_str):
         return False, "vacio", "Asignar NIF genérico"
     
     nif = str(nif_str).strip()
@@ -451,7 +419,7 @@ def validate_file(file_bytes, filename, mapping_data=None):
     auto_correctable = sum(1 for e in errors + corrections if e.get('correccion_auto'))
     needs_review = total_errors + total_warnings - auto_correctable
     
-    return _clean({
+    return {
         'filename': filename,
         'correduria': correduría,
         'data_sheet': data_sheet,
@@ -468,8 +436,8 @@ def validate_file(file_bytes, filename, mapping_data=None):
         'warnings': warnings,
         'corrections': corrections,
         'mapping_available': bool(mapping),
-        'preview': df.head(5).replace({np.nan: None}).to_dict(orient='records'),
-    })
+        'preview': df.head(5).to_dict(orient='records'),
+    }
 
 
 # ─── STRUCTURE DETECTION ─────────────────────────────────────────────────────
@@ -657,7 +625,7 @@ def run_data_quality(files):
     total_warnings = sum(r.get('total_warnings', 0) for r in results if 'error' not in r)
     auto_correctable = sum(r.get('auto_correctable', 0) for r in results if 'error' not in r)
     
-    return _clean({
+    return {
         'fecha_analisis': datetime.now().strftime('%d/%m/%Y %H:%M'),
         'total_files': len(results),
         'total_records': total_records,
@@ -667,7 +635,7 @@ def run_data_quality(files):
         'needs_manual_review': total_errors + total_warnings - auto_correctable,
         'results': results,
         'arrenta_comparison': arrenta_comparison,
-    })
+    }
 
 
 # ─── HELPERS ─────────────────────────────────────────────────────────────────
