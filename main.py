@@ -546,3 +546,41 @@ async def audit_report():
         'audit_report': report,
         'spot_checks': spots,
     }))
+
+
+# ─── DETAILED LOG ─────────────────────────────────────────────────────────────
+
+@app.post("/api/detailed-log")
+async def detailed_log(files: List[UploadFile] = File(...)):
+    """Generate detailed row-by-row error log."""
+    from detailed_log import generate_all_logs
+    from json_cleaner import clean_for_json
+    file_list = []
+    for f in files:
+        content = await f.read()
+        file_list.append((f.filename, content))
+    result = generate_all_logs(file_list)
+    return JSONResponse(content=clean_for_json(result))
+
+
+@app.post("/api/detailed-log-demo")
+async def detailed_log_demo():
+    """Generate detailed log for pilot files."""
+    from detailed_log import generate_all_logs
+    from json_cleaner import clean_for_json
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    pilot_files = [
+        "PILOT_202602_Araytor.xlsx",
+        "PILOT_202602_Zurriola.xlsx",
+        "PILOT_2026_02_SEGURETXE.xlsx",
+        "PILOT_2026_01_ARRENTA.xlsx",
+        "PILOT_202602_ARRENTA.xlsx",
+    ]
+    file_list = []
+    for fn in pilot_files:
+        fp = os.path.join(data_dir, fn)
+        if os.path.exists(fp):
+            with open(fp, "rb") as f:
+                file_list.append((fn, f.read()))
+    result = generate_all_logs(file_list)
+    return JSONResponse(content=clean_for_json(result))
