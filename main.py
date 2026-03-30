@@ -6,7 +6,7 @@ FastAPI server with real Sabseg reconciliation.
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from typing import List
 import os
 
@@ -586,48 +586,113 @@ async def detailed_log_demo():
     return JSONResponse(content=clean_for_json(result))
 
 
-@app.post("/api/download-log-demo")
-async def download_log_demo():
-    """Generate detailed log as downloadable Excel file."""
-    from detailed_log import generate_detailed_log
+# ─── RECONCILIATION RESOLUTION + EXPORT ───────────────────────────────────────
+
+@app.post("/api/resolve-reconciliation")
+async def resolve_reconciliation(body: dict = None):
+    """
+    Receive resolution decisions and generate closing report.
+    Body: { resolutions: [{id, empresa, mes, cuenta, decision, nota}] }
+    decision: "aprobar" | "ajustar" | "investigar"
+    """
+    from json_cleaner import clean_for_json
+    if not body or 'resolutions' not in body:
+        raise HTTPException(status_code=400, detail="Missing resolutions")
+    
+    resolutions = body['resolutions']
+    approved = [r for r in resolutions if r.get('decision') == 'aprobar']
+    adjusted = [r for r in resolutions if r.get('decision') == 'ajustar']
+    investigate = [r for r in resolutions if r.get('decision') == 'investigar']
+    
+    return JSONResponse(content=clean_for_json({
+        'total': len(resolutions),
+        'aprobadas': len(approved),
+        'ajustadas': len(adjusted),
+        'pendientes': len(investigate),
+        'pct_cerrado': round((len(approved) + len(adjusted)) / max(len(resolutions), 1) * 100, 1),
+        'resolutions': resolutions,
+    }))
+
+
+@app.post("/api/export-reconciliation")
+async def export_reconciliation():
+    """Export reconciliation results as downloadable Excel."""
+    from reconciliation_sabseg import run_sabseg_reconciliation
     from io import BytesIO
     import pandas as pd
-
+    
     data_dir = os.path.join(os.path.dirname(__file__), "data")
-    pilot_files = [
-        "PILOT_202602_Araytor.xlsx",
-        "PILOT_202602_Zurriola.xlsx",
-        "PILOT_2026_02_SEGURETXE.xlsx",
-        "PILOT_2026_01_ARRENTA.xlsx",
-        "PILOT_202602_ARRENTA.xlsx",
-    ]
-
-    all_logs = []
-    for fn in pilot_files:
+    saldos_path = os.path.join(data_dir, "Saldos_Contables_Ene_y_Feb_2026.xlsx")
+    
+    with open(saldos_path, "rb") as f:
+        saldos_bytes = f.read()
+    
+    stats_files = []
+    for fn in os.listdir(data_dir):
+        if fn == "Saldos_Contables_Ene_y_Feb_2026.xlsx" or fn.startswith("PILOT") or fn.startswith("Pack") or fn.startswith("Modelo") or fn == "Piloto_IA_Errores.xlsx":
+            continue
         fp = os.path.join(data_dir, fn)
-        if os.path.exists(fp):
+        if os.path.isfile(fp):
             with open(fp, "rb") as f:
-                log_result = generate_detailed_log(f.read(), fn)
-            if log_result.get('log'):
-                for entry in log_result['log']:
-                    entry['fichero'] = fn
-                    entry['correduria'] = log_result.get('correduria', '')
-                all_logs.extend(log_result['log'])
-
-    df = pd.DataFrame(all_logs)
-    if len(df) > 0:
-        cols = ['fichero', 'correduria', 'fila', 'campo', 'error', 'valor_original', 'accion', 'valor_corregido', 'tipo']
-        cols = [c for c in cols if c in df.columns]
-        headers = ['Fichero', 'Correduría', 'Fila', 'Campo', 'Error', 'Valor Original', 'Acción', 'Valor Corregido', 'Tipo']
-        df = df[cols]
-        df.columns = headers[:len(cols)]
-
+                stats_files.append((fn, f.read()))
+    
+    result = run_sabseg_reconciliation(saldos_bytes, stats_files)
+    
+    if 'error' in result:
+        raise HTTPException(status_code=500, detail=result['error'])
+    
+    recon = result.get('reconciliacion', [])
+    
+    rows = []
+    for r in recon:
+        rows.append({
+            'Empresa': r['empresa'],
+            'Mes': r['mes_label'],
+            'Cuenta': r['cuenta_label'],
+            'Estadística (€)': r['estadistica'],
+            'Contabilidad (€)': r['contabilidad'],
+            'Diferencia (€)': r['diferencia'],
+            'Diferencia (%)': r['pct'],
+            'Estado': 'Cuadrado' if r['status'] == 'match' else ('Diferencia menor' if r['status'] == 'warning' else 'Discrepancia'),
+            'Severidad': r['severidad'],
+            'Explicación': r['explicacion'],
+            'Recibos analizados': r['recibos_analizados'],
+        })
+    
+    df = pd.DataFrame(rows)
+    
     output = BytesIO()
-    df.to_excel(output, index=False, engine='openpyxl')
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Reconciliación')
+        
+        # Summary sheet
+        summary_data = {
+            'Concepto': [
+                'Fecha análisis', 'Periodo', 'Empresas analizadas',
+                'Total partidas', 'Cuadradas', 'Diferencia menor (<5%)',
+                'Discrepancias', '% Cuadrado',
+                'Total estadísticas 705 (€)', 'Total contabilidad 705 (€)',
+            ],
+            'Valor': [
+                result.get('fecha_analisis', ''),
+                result.get('periodo', ''),
+                result.get('empresas_analizadas', 0),
+                result.get('total_partidas', 0),
+                result.get('partidas_cuadradas', 0),
+                result.get('partidas_warning', 0),
+                result.get('partidas_discrepancia', 0),
+                f"{result.get('pct_cuadrado', 0)}%",
+                result.get('total_estadistica_705', 0),
+                result.get('total_contabilidad_705', 0),
+            ]
+        }
+        pd.DataFrame(summary_data).to_excel(writer, index=False, sheet_name='Resumen')
+    
     output.seek(0)
-
+    
+    from starlette.responses import StreamingResponse
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=log_incidencias_sabseg.xlsx"}
+        headers={"Content-Disposition": "attachment; filename=reconciliacion_sabseg_ene_feb_2026.xlsx"}
     )
