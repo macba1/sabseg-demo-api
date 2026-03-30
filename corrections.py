@@ -199,7 +199,11 @@ def apply_corrections(file_bytes, filename):
                     except:
                         continue
                 
-                if pd.isna(parsed) if isinstance(parsed, type(pd.NaT)) else parsed is None:
+                try:
+                    still_bad = parsed is None or pd.isna(parsed)
+                except (TypeError, ValueError):
+                    still_bad = True
+                if still_bad:
                     date_unfixable.append({'row': idx, 'campo': dcol, 'value': str(val)})
     
     if date_fixes > 0:
