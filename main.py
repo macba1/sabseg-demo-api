@@ -6,7 +6,7 @@ FastAPI server with real Sabseg reconciliation.
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from typing import List
 import os
 
@@ -584,3 +584,50 @@ async def detailed_log_demo():
                 file_list.append((fn, f.read()))
     result = generate_all_logs(file_list)
     return JSONResponse(content=clean_for_json(result))
+
+
+@app.post("/api/download-log-demo")
+async def download_log_demo():
+    """Generate detailed log as downloadable Excel file."""
+    from detailed_log import generate_detailed_log
+    from io import BytesIO
+    import pandas as pd
+
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    pilot_files = [
+        "PILOT_202602_Araytor.xlsx",
+        "PILOT_202602_Zurriola.xlsx",
+        "PILOT_2026_02_SEGURETXE.xlsx",
+        "PILOT_2026_01_ARRENTA.xlsx",
+        "PILOT_202602_ARRENTA.xlsx",
+    ]
+
+    all_logs = []
+    for fn in pilot_files:
+        fp = os.path.join(data_dir, fn)
+        if os.path.exists(fp):
+            with open(fp, "rb") as f:
+                log_result = generate_detailed_log(f.read(), fn)
+            if log_result.get('log'):
+                for entry in log_result['log']:
+                    entry['fichero'] = fn
+                    entry['correduria'] = log_result.get('correduria', '')
+                all_logs.extend(log_result['log'])
+
+    df = pd.DataFrame(all_logs)
+    if len(df) > 0:
+        cols = ['fichero', 'correduria', 'fila', 'campo', 'error', 'valor_original', 'accion', 'valor_corregido', 'tipo']
+        cols = [c for c in cols if c in df.columns]
+        headers = ['Fichero', 'Correduría', 'Fila', 'Campo', 'Error', 'Valor Original', 'Acción', 'Valor Corregido', 'Tipo']
+        df = df[cols]
+        df.columns = headers[:len(cols)]
+
+    output = BytesIO()
+    df.to_excel(output, index=False, engine='openpyxl')
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=log_incidencias_sabseg.xlsx"}
+    )
