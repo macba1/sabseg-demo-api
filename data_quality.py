@@ -349,7 +349,14 @@ def validate_file(file_bytes, filename, mapping_data=None):
     situacion_col = _find_column(df, ['Situacion', 'Est', 'Estado'])
     
     if poliza_col and fecha_fac_col:
-        dupes = df.duplicated(subset=[poliza_col, fecha_fac_col], keep=False)
+        prima_col_dup = _find_column(df, ['PrimaNeta', 'Prima neta', 'Prima'])
+        if prima_col_dup:
+            subset_cols = [poliza_col, fecha_fac_col, prima_col_dup]
+            campo_label = f'{poliza_col} + {fecha_fac_col} + {prima_col_dup}'
+        else:
+            subset_cols = [poliza_col, fecha_fac_col]
+            campo_label = f'{poliza_col} + {fecha_fac_col}'
+        dupes = df.duplicated(subset=subset_cols, keep=False)
         if situacion_col:
             # Only flag if neither is anulado
             anulado_mask = df[situacion_col].astype(str).str.lower().str.contains('anulad', na=False)
@@ -357,14 +364,14 @@ def validate_file(file_bytes, filename, mapping_data=None):
             n_dupes = problematic_dupes.sum()
         else:
             n_dupes = dupes.sum()
-        
+
         if n_dupes > 0:
             error_id += 1
             warnings.append({
                 'id': error_id, 'tipo': 'Posibles recibos duplicados', 'error_num': 17,
-                'severidad': 'Media', 'campo': f'{poliza_col} + {fecha_fac_col}',
+                'severidad': 'Media', 'campo': campo_label,
                 'cantidad': int(n_dupes),
-                'detalle': f"{n_dupes} recibos con misma póliza y fecha sin estar anulados",
+                'detalle': f"{n_dupes} recibos con misma póliza, fecha e importe sin estar anulados",
                 'sugerencia': 'Verificar si son duplicados o recibos legítimos',
             })
     
