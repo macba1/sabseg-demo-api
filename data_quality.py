@@ -348,17 +348,19 @@ def validate_file(file_bytes, filename, mapping_data=None):
     fecha_fac_col = _find_column(df, ['FechaFacturacion', 'F. Producc.', 'Fecha facturación'])
     situacion_col = _find_column(df, ['Situacion', 'Est', 'Estado'])
     
-    if poliza_col and fecha_fac_col:
-        prima_col_dup = _find_column(df, ['PrimaNeta', 'Prima neta', 'Prima'])
-        if prima_col_dup:
-            subset_cols = [poliza_col, fecha_fac_col, prima_col_dup]
-            campo_label = f'{poliza_col} + {fecha_fac_col} + {prima_col_dup}'
-        else:
-            subset_cols = [poliza_col, fecha_fac_col]
-            campo_label = f'{poliza_col} + {fecha_fac_col}'
+    recibo_col = _find_column(df, ['NumeroReciboCompania', 'NumeroReciboInterno', 'NºRecibo'])
+    if recibo_col:
+        subset_cols = [recibo_col]
+        campo_label = recibo_col
+    elif poliza_col and fecha_fac_col:
+        subset_cols = [poliza_col, fecha_fac_col]
+        campo_label = f'{poliza_col} + {fecha_fac_col}'
+    else:
+        subset_cols = None
+
+    if subset_cols:
         dupes = df.duplicated(subset=subset_cols, keep=False)
         if situacion_col:
-            # Only flag if neither is anulado
             anulado_mask = df[situacion_col].astype(str).str.lower().str.contains('anulad', na=False)
             problematic_dupes = dupes & ~anulado_mask
             n_dupes = problematic_dupes.sum()
@@ -367,11 +369,12 @@ def validate_file(file_bytes, filename, mapping_data=None):
 
         if n_dupes > 0:
             error_id += 1
+            detalle_txt = f"{n_dupes} recibos con mismo número de recibo sin estar anulados" if recibo_col else f"{n_dupes} recibos con misma póliza y fecha sin estar anulados"
             warnings.append({
                 'id': error_id, 'tipo': 'Posibles recibos duplicados', 'error_num': 17,
                 'severidad': 'Media', 'campo': campo_label,
                 'cantidad': int(n_dupes),
-                'detalle': f"{n_dupes} recibos con misma póliza, fecha e importe sin estar anulados",
+                'detalle': detalle_txt,
                 'sugerencia': 'Verificar si son duplicados o recibos legítimos',
             })
     
