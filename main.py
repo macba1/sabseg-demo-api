@@ -742,3 +742,30 @@ async def download_log_demo():
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=log_incidencias_sabseg.xlsx"}
     )
+
+
+# ─── VALIDATION AGENTS (Phase 1) ─────────────────────────────────────────────
+
+@app.post("/api/validate-files-demo")
+async def validate_files_demo():
+    """Run FileReader + DataVerifier agents on pilot files."""
+    from validation_agents import validate_files
+    from json_cleaner import clean_for_json
+
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    pilot_files = [
+        "PILOT_202602_Araytor.xlsx",
+        "PILOT_202602_Zurriola.xlsx",
+        "PILOT_2026_02_SEGURETXE.xlsx",
+        "PILOT_2026_01_ARRENTA.xlsx",
+        "PILOT_202602_ARRENTA.xlsx",
+    ]
+
+    file_paths = []
+    for fn in pilot_files:
+        fp = os.path.join(data_dir, fn)
+        if os.path.exists(fp):
+            file_paths.append(fp)
+
+    result = validate_files(file_paths)
+    return JSONResponse(content=clean_for_json(result))
