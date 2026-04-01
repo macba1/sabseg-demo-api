@@ -406,6 +406,222 @@ class DataVerifier:
         }
 
 
+# ── Format signatures for reconciliation files ───────────────────────────────
+
+FORMAT_SIGNATURES = [
+    {
+        'name': 'ELEVIA',
+        'match': ['Comisión prima neta', 'Comisión complementaria', 'Comisión correduría', 'Comisión Colaborador', 'Empresa'],
+        'min_match': 4,
+        'col_705': ['Comisión prima neta', 'Comisión complementaria'],
+        'formula_705': 'CPN + CC (o Comisión correduría)',
+        'col_623': ['Comisión Colaborador'],
+        'formula_623': 'Comisión Colaborador',
+    },
+    {
+        'name': 'PLANTILLA_REPORT',
+        'match': ['ComisionCorreduria', 'ComisionPrimaNeta', 'ComisionComplementaria', 'ComisionColaborador1'],
+        'min_match': 3,
+        'col_705': ['ComisionPrimaNeta', 'ComisionComplementaria'],
+        'formula_705': 'CPN + CC (= ComisionCorreduria)',
+        'col_623': ['ComisionColaborador1', 'ComisionColaborador2', 'ComisionColaborador3', 'ComisionColaboradorSupervisor'],
+        'formula_623': 'Suma Colaboradores',
+    },
+    {
+        'name': 'MODELO_DATOS',
+        'match': ['Comisión prima neta', 'Comisión complementaria', 'Comisión Bruta', 'Colaborador 1'],
+        'min_match': 3,
+        'col_705': ['Comisión prima neta', 'Comisión complementaria'],
+        'formula_705': 'CPN + CC (= Comisión Bruta)',
+        'col_623': ['Comisión colaborador 1', 'Comisión colaborador 2', 'Comisión colaborador 3'],
+        'formula_623': 'Suma Comisión colaboradores',
+    },
+    {
+        'name': 'FUTURA',
+        'match': ['Comisión neta €', 'Comisión cedida €', 'Comisión Bruta\n(Cedida + Neta + Honorarios)'],
+        'min_match': 2,
+        'col_705': ['Comisión neta €'],
+        'formula_705': 'Comisión neta € (+ Honorarios?)',
+        'col_623': ['Comisión cedida €'],
+        'formula_623': 'Comisión cedida €',
+        'extra': {'honorarios': 'Prima total \n(Neta + Honorarios)'},
+        'alert': 'Fichero tiene Honorarios separados. No incluidos en 705 por defecto. Confirmar con cliente.',
+    },
+    {
+        'name': 'SEGURETXE',
+        'match': ['Com, Bruta', 'Comisión Prima Neta', 'Sobrecomisión', 'Comisión Cedida al colaborador'],
+        'min_match': 3,
+        'col_705': ['Comisión Prima Neta', 'Sobrecomisión'],
+        'formula_705': 'CPN + Sobrecomisión (= Com Bruta)',
+        'col_623': ['Comisión Cedida al colaborador'],
+        'formula_623': 'Comisión Cedida al colaborador',
+    },
+    {
+        'name': 'SANCHEZ_VALENCIA',
+        'match': ['Comisión correduría', 'Comisión prima neta', 'Comisión complementaria', 'Comisión colaborador'],
+        'min_match': 3,
+        'col_705': ['Comisión prima neta', 'Comisión complementaria'],
+        'formula_705': 'CPN + CC (= Comisión correduría)',
+        'col_623': ['Comisión colaborador'],
+        'formula_623': 'Comisión colaborador',
+    },
+    {
+        'name': 'AGRO',
+        'match': ['RCom.Bruta', 'RCom.Neta', 'RCom.Cedida', 'RP.Neta', 'RHonorarios'],
+        'min_match': 3,
+        'col_705': ['RCom.Neta', 'RHonorarios'],
+        'formula_705': 'RCom.Neta + RHonorarios (ALERTA: confirmar)',
+        'col_623': ['RCom.Cedida', 'RCom.CedidaReal'],
+        'formula_623': 'RCom.Cedida / RCom.CedidaReal',
+        'alert': 'Formato AGRO con múltiples columnas de comisión. Requiere revisión manual de mapping.',
+    },
+    {
+        'name': 'HONORARIOS',
+        'match': ['COLABORADOR 1', 'IMP. COLAB.', '% COMIS.'],
+        'min_match': 2,
+        'col_705': [],
+        'formula_705': 'N/A — fichero de honorarios, no contiene comisiones 705',
+        'col_623': ['IMP. COLAB.', 'IMP. COLAB.2'],
+        'formula_623': 'Importes colaboradores',
+        'alert': 'Fichero de honorarios. Solo contiene comisiones cedidas (623), no comisiones propias (705).',
+    },
+]
+
+
+class FormatDetector:
+    """
+    Agent 3 — Detects the format/structure of a reconciliation file
+    and identifies which columns map to cuenta 705 and 623.
+    """
+
+    def detect_format(self, filepath, reader_result):
+        """Identify file format and commission column mapping."""
+        filename = reader_result.get('filename', os.path.basename(filepath))
+        print(f"[FormatDetector] Analyzing {filename}")
+
+        if reader_result.get('status') == 'error':
+            return {
+                'filename': filename,
+                'formato': 'ERROR',
+                'confianza': 'ninguna',
+                'columnas_705': [],
+                'columnas_623': [],
+                'formula_705_propuesta': 'N/A',
+                'formula_623_propuesta': 'N/A',
+                'alertas': [reader_result.get('error', 'Error en lectura')],
+                'todas_columnas_comision': [],
+            }
+
+        if filepath.lower().endswith('.pdf'):
+            return {
+                'filename': filename,
+                'formato': 'PDF',
+                'confianza': 'baja',
+                'columnas_705': [],
+                'columnas_623': [],
+                'formula_705_propuesta': 'Extracción de texto PDF necesaria',
+                'formula_623_propuesta': 'Extracción de texto PDF necesaria',
+                'alertas': ['Fichero PDF. Se requiere pdfplumber para extracción de datos.'],
+                'todas_columnas_comision': [],
+            }
+
+        columns = reader_result.get('columns', [])
+        col_lower_map = {}  # lower → original
+        for c in columns:
+            if c:
+                col_lower_map[c.lower().strip()] = c
+
+        # Find all commission-related columns
+        comision_keywords = ['comis', 'honor', 'cedid', 'colab', 'brut', 'neta', 'sobr', 'imp. colab']
+        todas_comision = [c for c in columns if c and any(kw in c.lower() for kw in comision_keywords)]
+
+        # Try to match against known signatures
+        best_format = None
+        best_score = 0
+
+        for sig in FORMAT_SIGNATURES:
+            score = 0
+            for pattern in sig['match']:
+                pattern_lower = pattern.lower().strip()
+                # Check exact match or substring match
+                for col in columns:
+                    if col and (col.lower().strip() == pattern_lower or pattern_lower in col.lower()):
+                        score += 1
+                        break
+            if score >= sig['min_match'] and score > best_score:
+                best_score = score
+                best_format = sig
+
+        if best_format:
+            # Find actual column names for the mapped columns
+            def find_actual(candidates):
+                found = []
+                for cand in candidates:
+                    cand_lower = cand.lower().strip()
+                    for col in columns:
+                        if col and (col.lower().strip() == cand_lower or cand_lower in col.lower()):
+                            found.append(col)
+                            break
+                return found
+
+            col_705 = find_actual(best_format['col_705'])
+            col_623 = find_actual(best_format['col_623'])
+            confianza = 'alta' if best_score >= len(best_format['match']) else 'media'
+
+            alertas = []
+            if best_format.get('alert'):
+                alertas.append(best_format['alert'])
+            if not col_705:
+                alertas.append('No se encontraron columnas para cuenta 705')
+                confianza = 'baja'
+            if not col_623:
+                alertas.append('No se encontraron columnas para cuenta 623')
+
+            extra = {}
+            if best_format.get('extra'):
+                for key, pattern in best_format['extra'].items():
+                    actual = find_actual([pattern])
+                    if actual:
+                        extra[key] = actual[0]
+
+            result = {
+                'filename': filename,
+                'formato': best_format['name'],
+                'confianza': confianza,
+                'columnas_705': col_705,
+                'columnas_623': col_623,
+                'columnas_adicionales': extra if extra else None,
+                'formula_705_propuesta': best_format['formula_705'],
+                'formula_623_propuesta': best_format['formula_623'],
+                'alertas': alertas,
+                'todas_columnas_comision': todas_comision,
+            }
+        else:
+            # Unknown format
+            result = {
+                'filename': filename,
+                'formato': 'DESCONOCIDO',
+                'confianza': 'baja',
+                'columnas_705': [],
+                'columnas_623': [],
+                'columnas_adicionales': None,
+                'formula_705_propuesta': 'No se pudo detectar automáticamente',
+                'formula_623_propuesta': 'No se pudo detectar automáticamente',
+                'alertas': [
+                    f'Formato no reconocido. {len(columns)} columnas detectadas.',
+                    f'Columnas con posible comisión: {", ".join(todas_comision) if todas_comision else "ninguna"}',
+                ],
+                'todas_columnas_comision': todas_comision,
+            }
+
+        print(f"[FormatDetector] {filename}: formato={result['formato']}, "
+              f"confianza={result['confianza']}, 705={result['columnas_705']}, 623={result['columnas_623']}")
+
+        return result
+
+
+# ── Pipeline orchestrators ────────────────────────────────────────────────────
+
 def validate_files(file_paths):
     """Run FileReader + DataVerifier on a list of file paths."""
     reader = FileReader()
@@ -418,6 +634,30 @@ def validate_files(file_paths):
         results.append({
             'reader': reader_result,
             'verifier': verifier_result,
+        })
+
+    return {
+        'timestamp': datetime.now().strftime('%d/%m/%Y %H:%M'),
+        'total_files': len(results),
+        'files': results,
+    }
+
+
+def validate_recon_files(file_paths):
+    """Run FileReader + DataVerifier + FormatDetector on reconciliation files."""
+    reader = FileReader()
+    verifier = DataVerifier()
+    detector = FormatDetector()
+
+    results = []
+    for fp in file_paths:
+        reader_result = reader.read_file(fp)
+        verifier_result = verifier.verify_file(fp, reader_result)
+        format_result = detector.detect_format(fp, reader_result)
+        results.append({
+            'reader': reader_result,
+            'verifier': verifier_result,
+            'format': format_result,
         })
 
     return {

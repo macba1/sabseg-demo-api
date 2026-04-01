@@ -769,3 +769,39 @@ async def validate_files_demo():
 
     result = validate_files(file_paths)
     return JSONResponse(content=clean_for_json(result))
+
+
+@app.post("/api/validate-recon-files-demo")
+async def validate_recon_files_demo():
+    """Run FileReader + DataVerifier + FormatDetector on reconciliation files."""
+    from validation_agents import validate_recon_files
+    from json_cleaner import clean_for_json
+
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    recon_files = [
+        "2026_02_ELEVIA.xlsx",
+        "2026_02 INSURART.xlsx",
+        "2026_02 FUTURA.xlsx",
+        "2026_02 Araytor.xlsx",
+        "2026_02 ZURRIOLA.xlsx",
+        "2026_02 SEGURETXE - v2.xlsx",
+        "2026_02 SANCHEZ VALENCIA.xlsx",
+        "2026_02 AGRINALCAZAR AGRO.xlsx",
+        "2026_02 Verobroker.xlsx",
+        "02_2026 ADSA AGRO.xlsx",
+        "02_2026 AISA AGRO.xlsx",
+        "02_2026 BANA AGRO.xlsx",
+        "Recibos_ARRENTA_202602.xlsx",
+        "Honorarios Ores 2 Febrero 2026.xlsx",
+        "MAURA.pdf",
+        "Saldos_Contables_Ene_y_Feb_2026.xlsx",
+    ]
+
+    file_paths = []
+    for fn in recon_files:
+        fp = os.path.join(data_dir, fn)
+        if os.path.exists(fp):
+            file_paths.append(fp)
+
+    result = validate_recon_files(file_paths)
+    return JSONResponse(content=clean_for_json(result))
