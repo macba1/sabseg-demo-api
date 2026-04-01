@@ -82,6 +82,14 @@ class FileReader:
                 best_row_count = non_empty
                 best_sheet = sheet_name
 
+        # Prefer sheets named "Datos" or "Data" (common data sheet names)
+        preferred_names = ['datos', 'data']
+        for s in sheets_info:
+            if s['name'].lower().strip() in preferred_names and s['non_empty_rows'] > 10:
+                best_sheet = s['name']
+                best_row_count = s['non_empty_rows']
+                break
+
         if not best_sheet:
             wb.close()
             return {
@@ -410,15 +418,6 @@ class DataVerifier:
 
 FORMAT_SIGNATURES = [
     {
-        'name': 'ELEVIA',
-        'match': ['Comisión prima neta', 'Comisión complementaria', 'Comisión correduría', 'Comisión Colaborador', 'Empresa'],
-        'min_match': 4,
-        'col_705': ['Comisión prima neta', 'Comisión complementaria'],
-        'formula_705': 'CPN + CC (o Comisión correduría)',
-        'col_623': ['Comisión Colaborador'],
-        'formula_623': 'Comisión Colaborador',
-    },
-    {
         'name': 'PLANTILLA_REPORT',
         'match': ['ComisionCorreduria', 'ComisionPrimaNeta', 'ComisionComplementaria', 'ComisionColaborador1'],
         'min_match': 3,
@@ -429,12 +428,21 @@ FORMAT_SIGNATURES = [
     },
     {
         'name': 'MODELO_DATOS',
-        'match': ['Comisión prima neta', 'Comisión complementaria', 'Comisión Bruta', 'Colaborador 1'],
-        'min_match': 3,
+        'match': ['Comisión prima neta', 'Comisión complementaria', 'Comisión Bruta', 'Colaborador 1', 'Fecha facturación'],
+        'min_match': 4,
         'col_705': ['Comisión prima neta', 'Comisión complementaria'],
         'formula_705': 'CPN + CC (= Comisión Bruta)',
         'col_623': ['Comisión colaborador 1', 'Comisión colaborador 2', 'Comisión colaborador 3'],
         'formula_623': 'Suma Comisión colaboradores',
+    },
+    {
+        'name': 'ELEVIA',
+        'match': ['Comisión prima neta', 'Comisión complementaria', 'Comisión correduría', 'Comisión Colaborador', 'Empresa', 'mes'],
+        'min_match': 5,
+        'col_705': ['Comisión prima neta', 'Comisión complementaria'],
+        'formula_705': 'CPN + CC (o Comisión correduría)',
+        'col_623': ['Comisión Colaborador'],
+        'formula_623': 'Comisión Colaborador',
     },
     {
         'name': 'FUTURA',
